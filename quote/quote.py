@@ -278,6 +278,7 @@ async def extract_message(msg, client=None, message_obj: Message = None):
         except Exception:
             pass
 
+    # 保持 text 变量在初始化时已经包含了 msg.text 或 msg.caption
     text = msg.text or msg.caption or ""
 
     s3_key_for_cleanup = None
@@ -294,27 +295,18 @@ async def extract_message(msg, client=None, message_obj: Message = None):
     if not has_content:
         return None
 
-    if not text:
-        if msg.photo or msg.sticker or \
-                (msg.document and getattr(msg.document, 'mime_type', '').startswith('image/')) or \
-                msg.animation:
-            text = ""
-        else:
-            text = "[媒体]"
-
     data = {
         "from": {
             "id": user.id,
             "name": name,
             "username": getattr(user, "username", ""),
             "emoji_status": str(getattr(getattr(user, "emoji_status", None), "custom_emoji_id", "")) or None,
+            # 即使没有头像，也确保 photo 键存在，值为 None 或空字符串
+            "photo": {"base64": avatar_base64} if avatar_base64 else {"base64": None},
         },
         "avatar": True,
-        "text": text,
+        "text": text, # 这里的 text 现在会正确包含 msg.text 或 msg.caption 的内容
     }
-
-    if avatar_base64:
-        data["from"]["photo"] = {"base64": avatar_base64}
 
     # --- 用户提供的代码片段，直接替换现有逻辑 ---
     if msg.entities:
@@ -360,7 +352,7 @@ async def extract_message(msg, client=None, message_obj: Message = None):
                     await message_obj.edit(
                         f"❌ 媒体文件过大，大小: {file_size} 字节，最大限制: {MEDIA_SETTINGS['max_file_size']} 字节")
                     await asyncio.sleep(10)
-                    data["text"] = "*媒体文件过大*"
+                    data["text"] = "*媒体文件过大*" # 出现错误时覆盖文本
                     return data
 
                 media_bytes_peek = downloaded_media_io.getvalue()[:2048]
@@ -381,7 +373,7 @@ async def extract_message(msg, client=None, message_obj: Message = None):
                     else:
                         await message_obj.edit("❌ 提取第一帧失败，跳过媒体处理。")
                         await asyncio.sleep(5)
-                        data["text"] = "*提取第一帧失败*"
+                        data["text"] = "*提取第一帧失败*" # 提取失败时覆盖文本
                         return data  # 提取失败则不继续处理媒体
 
                 else:  # 对于非动画图像，直接使用检测到的格式
@@ -397,24 +389,25 @@ async def extract_message(msg, client=None, message_obj: Message = None):
                                 "type": "image",  # 提取第一帧后，统一视为图片
                                 "s3_key": s3_key_for_cleanup
                             }
-                            data["text"] = ""
+                            # --- 删除了原有导致媒体消息文本被清空的逻辑 ---
+                            # data["text"] = "" # 注释掉此行，以保留 msg.caption 的内容
                         else:
                             await message_obj.edit("❌ S3上传失败，跳过媒体处理。")
                             await asyncio.sleep(5)
-                            data["text"] = "*S3上传失败*"
+                            data["text"] = "*S3上传失败*" # 上传失败时覆盖文本
                     else:
                         await message_obj.edit("❌ S3未配置或配置不完整，跳过媒体处理。")
                         await asyncio.sleep(5)
-                        data["text"] = "*S3未配置*"
+                        data["text"] = "*S3未配置*" # S3未配置时覆盖文本
                 else:
                     await message_obj.edit(f"❌ 不支持的媒体格式: {format_type}。")
                     await asyncio.sleep(5)
-                    data["text"] = f"*不支持的媒体格式: {format_type}*"
+                    data["text"] = f"*不支持的媒体格式: {format_type}*" # 格式不支持时覆盖文本
 
         except Exception as e:
             await message_obj.edit(f"❌ 媒体文件处理失败: {str(e)}\n请检查文件或网络。")
             await asyncio.sleep(10)
-            data["text"] = f"*媒体文件处理失败：{str(e)}*"
+            data["text"] = f"*媒体文件处理失败：{str(e)}*" # 媒体处理异常时覆盖文本
 
     return data
 
@@ -488,8 +481,8 @@ async def quotly_handler(message: Message):
             data["avatar"] = False
             data["from"]["name"] = ""
             data["from"]["username"] = ""
-            if "photo" in data["from"]:
-                del data["from"]["photo"]
+            # 如果是同一用户，则清空头像数据，让 API 知道不要显示头像
+            data["from"]["photo"] = {"base64": None}
         else:
             last_user_id = current_user_id
 
