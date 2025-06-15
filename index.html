@@ -71,6 +71,11 @@
             margin-top: 20px;
             border-radius: 8px;
             box-shadow: 0 4px 8px rgba(0, 0, 0, 0.05);
+            min-height: 200px; /* 确保有足够的高度显示区域 */
+            display: flex; /* 使用 flexbox 居中内容 */
+            justify-content: center;
+            align-items: center;
+            text-align: center;
         }
 
         main p {
@@ -89,4 +94,50 @@
 
         /* 响应式设计 */
         @media (max-width: 768px) {
-            nav
+            nav ul li {
+                display: block;
+                margin: 10px 0;
+            }
+
+            header h1 {
+                font-size: 2em;
+            }
+
+            main {
+                padding: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="container">
+            <h1>zkysimon/pgm_plugins</h1>
+            <p>PagerMaid-Pyro 项目的插件集合</p>
+        </div>
+    </header>
+
+    <nav>
+        <div class="container">
+            <ul>
+                <li><a href="https://github.com/zkysimon/pgm_plugins" target="_blank">GitHub 仓库</a></li>
+                <li><a href="https://github.com/TeamPGM/PagerMaid-Pyro" target="_blank">PagerMaid-Pyro 官网</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <main>
+        <div class="container">
+            <p>这是一个测试页面，用于显示内容。</p>
+            <p>如果能看到这些文字，说明页面已经成功加载。</p>
+        </div>
+    </main>
+
+    <footer>
+        <div class="container">
+            <p>&copy; 2025 zkysimon. 保留所有权利。</p>
+            <p>由 <a href="https://github.com/TeamPGM/PagerMaid-Pyro" target="_blank" style="color: #777; text-decoration: underline;">PagerMaid-Pyro</a> 提供支持。</p>
+        </div>
+    </footer>
+</body>
+</html>
