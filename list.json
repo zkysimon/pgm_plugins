@@ -1,0 +1,55 @@
+{
+  "list": [
+    {
+      "name": "bincheck",
+      "version": "1.0",
+      "section": "chat",
+      "maintainer": "damm",
+      "size": "5kb",
+      "supported": true,
+      "des_short": "bin Plugin",
+      "des": "使用方法：,bin xxx （xxx为信用卡卡号前4-8位，推荐6位）"
+    },
+    {
+      "name": "fy",
+      "version": "1.0",
+      "section": "chat",
+      "maintainer": "zimk",
+      "size": "6kb",
+      "supported": true,
+      "des_short": "translate Plugin",
+      "des": "fy [无参数] 开关当前聊天翻译 | all on/off 开启或关闭全局翻译 | set <目标语言> 设置目标语言"
+    },
+    {
+      "name": "grptime",
+      "version": "1.0",
+      "section": "chat",
+      "maintainer": "damm",
+      "size": "5kb",
+      "supported": true,
+      "des_short": "grptime",
+      "des": "查询用户入群时间（仅限群组）"
+    },
+    {
+      "name": "mtts",
+      "version": "1.0",
+      "section": "chat",
+      "maintainer": "zimk",
+      "size": "6kb",
+      "supported": true,
+      "des_short": "文本转语音",
+      "des": "文本转语音
+"
+    },
+    {
+      "name": "quote",
+      "version": "1.0",
+      "section": "chat",
+      "maintainer": "zimk",
+      "size": "23kb",
+      "supported": true,
+      "des_short": "quote plugin",
+      "des": "语录生成 支持颜色参数 r启用回复 多条消息生成"
+    }
+  ]
+}
