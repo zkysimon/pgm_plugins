@@ -305,7 +305,7 @@ async def extract_message(msg, client=None, message_obj: Message = None):
             "photo": {"base64": avatar_base64} if avatar_base64 else {"base64": None},
         },
         "avatar": True,
-        "text": text, # 这里的 text 现在会正确包含 msg.text 或 msg.caption 的内容
+        "text": text,  # 这里的 text 现在会正确包含 msg.text 或 msg.caption 的内容
     }
 
     # --- 用户提供的代码片段，直接替换现有逻辑 ---
@@ -316,7 +316,7 @@ async def extract_message(msg, client=None, message_obj: Message = None):
                 "offset": e.offset,
                 "length": e.length,
                 **({"custom_emoji_id": str(e.custom_emoji_id)} if getattr(e, "type",
-                                                                           None) == MessageEntityType.CUSTOM_EMOJI else {})
+                                                                          None) == MessageEntityType.CUSTOM_EMOJI else {})
             }
             for e in msg.entities
         ]
@@ -352,7 +352,7 @@ async def extract_message(msg, client=None, message_obj: Message = None):
                     await message_obj.edit(
                         f"❌ 媒体文件过大，大小: {file_size} 字节，最大限制: {MEDIA_SETTINGS['max_file_size']} 字节")
                     await asyncio.sleep(10)
-                    data["text"] = "*媒体文件过大*" # 出现错误时覆盖文本
+                    data["text"] = "*媒体文件过大*"  # 出现错误时覆盖文本
                     return data
 
                 media_bytes_peek = downloaded_media_io.getvalue()[:2048]
@@ -373,7 +373,7 @@ async def extract_message(msg, client=None, message_obj: Message = None):
                     else:
                         await message_obj.edit("❌ 提取第一帧失败，跳过媒体处理。")
                         await asyncio.sleep(5)
-                        data["text"] = "*提取第一帧失败*" # 提取失败时覆盖文本
+                        data["text"] = "*提取第一帧失败*"  # 提取失败时覆盖文本
                         return data  # 提取失败则不继续处理媒体
 
                 else:  # 对于非动画图像，直接使用检测到的格式
@@ -394,20 +394,20 @@ async def extract_message(msg, client=None, message_obj: Message = None):
                         else:
                             await message_obj.edit("❌ S3上传失败，跳过媒体处理。")
                             await asyncio.sleep(5)
-                            data["text"] = "*S3上传失败*" # 上传失败时覆盖文本
+                            data["text"] = "*S3上传失败*"  # 上传失败时覆盖文本
                     else:
                         await message_obj.edit("❌ S3未配置或配置不完整，跳过媒体处理。")
                         await asyncio.sleep(5)
-                        data["text"] = "*S3未配置*" # S3未配置时覆盖文本
+                        data["text"] = "*S3未配置*"  # S3未配置时覆盖文本
                 else:
                     await message_obj.edit(f"❌ 不支持的媒体格式: {format_type}。")
                     await asyncio.sleep(5)
-                    data["text"] = f"*不支持的媒体格式: {format_type}*" # 格式不支持时覆盖文本
+                    data["text"] = f"*不支持的媒体格式: {format_type}*"  # 格式不支持时覆盖文本
 
         except Exception as e:
             await message_obj.edit(f"❌ 媒体文件处理失败: {str(e)}\n请检查文件或网络。")
             await asyncio.sleep(10)
-            data["text"] = f"*媒体文件处理失败：{str(e)}*" # 媒体处理异常时覆盖文本
+            data["text"] = f"*媒体文件处理失败：{str(e)}*"  # 媒体处理异常时覆盖文本
 
     return data
 
@@ -451,13 +451,7 @@ async def quotly_handler(message: Message):
             background_color = param
 
     base_id = base_msg.id
-    # 修正多条消息获取逻辑，确保ids是正确的范围
-    if offset < 0: # 实际上，上面的逻辑已经限制了offset不能为负数，这里保留以防万一
-        ids = list(range(base_id + offset, base_id + 1))  # 从回复消息往前数
-    elif offset > 0:
-        ids = list(range(base_id, base_id + offset + 1))  # 从回复消息往后数，包含回复消息本身
-    else:  # offset == 0
-        ids = [base_id]  # 仅处理回复消息本身
+    ids = [base_id + i for i in (range(offset + 1, 1) if offset < 0 else range(0, offset) if offset > 0 else [0])]
 
     messages_to_process = []
     for msg_id in ids:
@@ -467,7 +461,6 @@ async def quotly_handler(message: Message):
 
     if not messages_to_process:
         await process_msg.edit("❌ 未找到有效消息。")
-        await asyncio.sleep(5)
         return
 
     global s3_client_instance
@@ -530,7 +523,6 @@ async def quotly_handler(message: Message):
                         reply_text = "[文件]"
                     else:
                         reply_text = "[媒体]"
-
 
                 data["replyMessage"] = {
                     "name": reply_name,
