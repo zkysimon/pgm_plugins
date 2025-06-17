@@ -422,8 +422,14 @@ async def quotly_handler(message: Message):
 
     client = message._client
     chat_id = message.chat.id
-    base_msg = message.reply_to_message or message
+    base_msg = message.reply_to_message
     process_msg = await message.edit("生成中...")  # 简化初始提示
+
+    # 如果没有回复消息，直接返回提示
+    if not base_msg:
+        await process_msg.edit("❌ 请回复一条消息来生成语录。")
+        await asyncio.sleep(5)
+        return
 
     offset = 0
     background_color = QUOTE_SETTINGS["background_color"]
@@ -432,7 +438,13 @@ async def quotly_handler(message: Message):
     for param in message.parameter:
         p = param.lstrip("-")
         if p.isdigit():
-            offset = int(p)
+            # 检查是否为自然数（正整数或零）
+            if int(p) >= 0:
+                offset = int(p)
+            else:
+                await process_msg.edit("❌ 参数错误: 'q' 后的数字必须是自然数 (0 或正整数)。")
+                await asyncio.sleep(5)
+                return
         elif param.lower() in ("r", "回复"):
             enable_reply = True
         elif param.startswith("#") or param.isalpha():
@@ -440,10 +452,10 @@ async def quotly_handler(message: Message):
 
     base_id = base_msg.id
     # 修正多条消息获取逻辑，确保ids是正确的范围
-    if offset < 0:
+    if offset < 0: # 实际上，上面的逻辑已经限制了offset不能为负数，这里保留以防万一
         ids = list(range(base_id + offset, base_id + 1))  # 从回复消息往前数
     elif offset > 0:
-        ids = list(range(base_id, base_id + offset))  # 从回复消息往后数（不包含回复消息本身）
+        ids = list(range(base_id, base_id + offset + 1))  # 从回复消息往后数，包含回复消息本身
     else:  # offset == 0
         ids = [base_id]  # 仅处理回复消息本身
 
@@ -500,9 +512,29 @@ async def quotly_handler(message: Message):
                     ])
                     reply_name = " ".join(reply_name_parts) or "未知用户"
 
+                # 增强回复消息的文本内容判断
+                reply_text = reply_data.get("text", "")
+                if not reply_text and reply_data.get("media"):
+                    # 根据媒体类型提供默认文本
+                    if m.reply_to_message.photo:
+                        reply_text = "[图片]"
+                    elif m.reply_to_message.video or m.reply_to_message.animation:
+                        reply_text = "[视频]"
+                    elif m.reply_to_message.sticker:
+                        reply_text = "[贴纸]"
+                    elif m.reply_to_message.audio:
+                        reply_text = "[音频]"
+                    elif m.reply_to_message.voice:
+                        reply_text = "[语音]"
+                    elif m.reply_to_message.document:
+                        reply_text = "[文件]"
+                    else:
+                        reply_text = "[媒体]"
+
+
                 data["replyMessage"] = {
                     "name": reply_name,
-                    "text": reply_data.get("text", ""),
+                    "text": reply_text,
                     "entities": reply_data.get("entities", []),
                     "chatId": reply_data["from"]["id"],
                 }
