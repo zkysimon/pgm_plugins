@@ -274,7 +274,7 @@ async def extract_message(msg, client=None, message_obj: Message = None):
     if getattr(user, "photo", None):
         try:
             avatar = await client.download_media(user.photo.big_file_id, in_memory=True)
-            avatar_base64 = base64.b64encode(avatar.read()).decode()
+            avatar_base64 = base64.b64encode(avatar.getvalue()).decode()
         except Exception:
             pass
 
