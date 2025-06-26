@@ -263,52 +263,72 @@ async def get_message(client, chat_id, msg_id, message_obj: Message):
 
 
 async def extract_message(msg, client=None, message_obj: Message = None):
-    user = msg.from_user or msg.sender_chat
-    if not user:
-        return None
+    # --- 用户身份判断逻辑 ---
+    user = None
+    name = None
+    user_id = None
+    is_hidden_forward = False
 
-    name = " ".join(filter(None, [getattr(user, "first_name", None), getattr(user, "last_name", None)])) or getattr(
-        user, "title", None) or "未知"
+    # 优先级 1: 转发自隐藏了身份的用户
+    if msg.forward_sender_name:
+        is_hidden_forward = True
+        name = msg.forward_sender_name
+        user_id = hash(name)  # 使用名字的哈希作为唯一标识
+    # 优先级 2: 转发自公开身份的用户
+    elif msg.forward_from:
+        user = msg.forward_from
+    # 优先级 3: 转发自频道
+    elif msg.forward_from_chat:
+        user = msg.forward_from_chat
+    # 优先级 4: 普通消息
+    else:
+        user = msg.from_user or msg.sender_chat
+
+    if user:
+        user_id = user.id
+        if getattr(user, "is_deleted", False):
+            name = "已删除账户"
+        else:
+            # 优先用 title (用于频道), 否则拼接 first_name 和 last_name
+            name = getattr(user, "title", None) or " ".join(
+                filter(None, [getattr(user, "first_name", None), getattr(user, "last_name", None)])) or "未知"
+
+    if not name:
+        return None  # 如果最终无法确定发送者姓名，则跳过
 
     avatar_base64 = None
-    if getattr(user, "photo", None):
+    # 隐藏身份的转发、已删除账户或没有头像的用户，不处理头像
+    if user and not is_hidden_forward and not getattr(user, "is_deleted", False) and getattr(user, "photo", None):
         try:
             avatar = await client.download_media(user.photo.big_file_id, in_memory=True)
             avatar_base64 = base64.b64encode(avatar.getvalue()).decode()
         except Exception:
+            # 静默失败，避免因头像下载失败导致整个插件崩溃
             pass
 
-    # 保持 text 变量在初始化时已经包含了 msg.text 或 msg.caption
     text = msg.text or msg.caption or ""
-
-    s3_key_for_cleanup = None
-
-    has_content = (
-            msg.text or
-            msg.caption or
-            msg.photo or
-            msg.sticker or
-            (msg.document and getattr(msg.document, 'mime_type', '').startswith('image/')) or
-            (msg.animation)  # 包含动画 (WebM/MP4)
-    )
+    has_content = (text or msg.photo or msg.sticker or
+                   (msg.document and getattr(msg.document, 'mime_type', '').startswith('image/')) or
+                   msg.animation)
 
     if not has_content:
         return None
 
     data = {
         "from": {
-            "id": user.id,
+            "id": user_id,
             "name": name,
-            "username": getattr(user, "username", ""),
-            "emoji_status": str(getattr(getattr(user, "emoji_status", None), "custom_emoji_id", "")) or None,
-            # 即使没有头像，也确保 photo 键存在，值为 None 或空字符串
+            "username": getattr(user, "username", "") if user else "",
+            "emoji_status": str(getattr(getattr(user, "emoji_status", None), "custom_emoji_id", "")) if user else None,
             "photo": {"base64": avatar_base64} if avatar_base64 else {"base64": None},
         },
+        # --- 核心修正 ---
+        # 始终设为 True，让API去决定是显示真头像还是占位符。
+        # 对于不应该显示头像的情况（如连续消息），由 quotly_handler 稍后覆盖此值为 False。
         "avatar": True,
-        "text": text,  # 这里的 text 现在会正确包含 msg.text 或 msg.caption 的内容
+        "text": text,
     }
 
-    # --- 用户提供的代码片段，直接替换现有逻辑 ---
     if msg.entities:
         data["entities"] = [
             {
@@ -320,94 +340,63 @@ async def extract_message(msg, client=None, message_obj: Message = None):
             }
             for e in msg.entities
         ]
-    # --- 代码片段结束 ---
 
     if client and (msg.photo or msg.sticker or msg.animation or (
             msg.document and getattr(msg.document, 'mime_type', '').startswith('image/'))):
         try:
-            media_item = None
-            media_type_str = None
-            downloaded_media_io = None
-            format_type = None
+            media_item = msg.photo or msg.sticker or msg.animation or msg.document
+            downloaded_media_io = await client.download_media(media_item, in_memory=True)
+            downloaded_media_io.seek(0)
 
-            if msg.photo:
-                media_item = msg.photo
-                media_type_str = "photo"
-            elif msg.sticker:
-                media_item = msg.sticker
-                media_type_str = "sticker"
-            elif msg.document and getattr(msg.document, 'mime_type', '').startswith('image/'):
-                media_item = msg.document
-                media_type_str = "document_image"
-            elif msg.animation:  # 处理动画，如GIF或WebM
-                media_item = msg.animation
-                media_type_str = "animation"
+            file_size = len(downloaded_media_io.getvalue())
+            if file_size > MEDIA_SETTINGS["max_file_size"]:
+                await message_obj.edit(f"❌ 媒体文件过大: {file_size} > {MEDIA_SETTINGS['max_file_size']} 字节")
+                await asyncio.sleep(10)
+                data["text"] = "*媒体文件过大*"
+                return data
 
-            if media_item:
-                downloaded_media_io = await client.download_media(media_item, in_memory=True)
-                downloaded_media_io.seek(0)
+            media_bytes_peek = downloaded_media_io.getvalue()[:2048]
+            detected_format = detect_image_format(media_bytes_peek)
 
-                file_size = len(downloaded_media_io.getvalue())
-                if file_size > MEDIA_SETTINGS["max_file_size"]:
-                    await message_obj.edit(
-                        f"❌ 媒体文件过大，大小: {file_size} 字节，最大限制: {MEDIA_SETTINGS['max_file_size']} 字节")
-                    await asyncio.sleep(10)
-                    data["text"] = "*媒体文件过大*"  # 出现错误时覆盖文本
+            processed_media_io = downloaded_media_io
+            upload_media_type = "media"
+            format_type = detected_format
+
+            # 如果是动画（GIF, WebM等），提取第一帧
+            if detected_format in ["gif", "webm"] or (msg.animation):
+                await message_obj.edit("正在提取媒体第一帧...")
+                first_frame_io = await extract_first_frame(downloaded_media_io, message_obj)
+                if first_frame_io:
+                    processed_media_io = first_frame_io
+                    format_type = "jpg"
+                    upload_media_type = "extracted_frame"
+                    await message_obj.edit("第一帧提取成功，准备上传...")
+                else:
+                    await message_obj.edit("❌ 提取第一帧失败，跳过媒体处理。")
+                    data["text"] = "*提取第一帧失败*"
                     return data
 
-                media_bytes_peek = downloaded_media_io.getvalue()[:2048]
-                detected_format = detect_image_format(media_bytes_peek)
-
-                processed_media_io = downloaded_media_io  # 默认使用原始下载的io
-                upload_media_type = media_type_str  # 默认上传类型
-
-                # 如果是动画（GIF 或 WebM/MP4），提取第一帧
-                if media_type_str == "animation" or detected_format == "gif" or detected_format == "webm":
-                    await message_obj.edit("正在提取媒体第一帧...")
-                    first_frame_io = await extract_first_frame(downloaded_media_io, message_obj)
-                    if first_frame_io:
-                        processed_media_io = first_frame_io
-                        format_type = "jpg"  # 提取的第一帧总是JPEG
-                        upload_media_type = "extracted_frame"  # 标记为提取的帧
-                        await message_obj.edit("第一帧提取成功，准备上传...")
+            if format_type.lower() in MEDIA_SETTINGS['supported_formats'] or upload_media_type == "extracted_frame":
+                if S3_CONFIG.get("bucket_name") and S3_CONFIG.get("access_key"):
+                    image_url, s3_key_for_cleanup = await upload_to_s3(processed_media_io, upload_media_type,
+                                                                       format_type, message_obj)
+                    if image_url:
+                        data["media"] = {
+                            "url": image_url,
+                            "type": "image",
+                            "s3_key": s3_key_for_cleanup
+                        }
                     else:
-                        await message_obj.edit("❌ 提取第一帧失败，跳过媒体处理。")
-                        await asyncio.sleep(5)
-                        data["text"] = "*提取第一帧失败*"  # 提取失败时覆盖文本
-                        return data  # 提取失败则不继续处理媒体
-
-                else:  # 对于非动画图像，直接使用检测到的格式
-                    format_type = detected_format
-
-                if format_type.lower() in MEDIA_SETTINGS['supported_formats'] or upload_media_type == "extracted_frame":
-                    if S3_CONFIG.get("bucket_name") and S3_CONFIG.get("access_key"):
-                        image_url, s3_key_for_cleanup = await upload_to_s3(processed_media_io, upload_media_type,
-                                                                           format_type, message_obj)
-                        if image_url:
-                            data["media"] = {
-                                "url": image_url,
-                                "type": "image",  # 提取第一帧后，统一视为图片
-                                "s3_key": s3_key_for_cleanup
-                            }
-                            # --- 删除了原有导致媒体消息文本被清空的逻辑 ---
-                            # data["text"] = "" # 注释掉此行，以保留 msg.caption 的内容
-                        else:
-                            await message_obj.edit("❌ S3上传失败，跳过媒体处理。")
-                            await asyncio.sleep(5)
-                            data["text"] = "*S3上传失败*"  # 上传失败时覆盖文本
-                    else:
-                        await message_obj.edit("❌ S3未配置或配置不完整，跳过媒体处理。")
-                        await asyncio.sleep(5)
-                        data["text"] = "*S3未配置*"  # S3未配置时覆盖文本
+                        data["text"] = "*S3上传失败*"
                 else:
-                    await message_obj.edit(f"❌ 不支持的媒体格式: {format_type}。")
-                    await asyncio.sleep(5)
-                    data["text"] = f"*不支持的媒体格式: {format_type}*"  # 格式不支持时覆盖文本
+                    data["text"] = "*S3未配置*"
+            else:
+                data["text"] = f"*不支持的媒体格式: {format_type}*"
 
         except Exception as e:
-            await message_obj.edit(f"❌ 媒体文件处理失败: {str(e)}\n请检查文件或网络。")
+            await message_obj.edit(f"❌ 媒体文件处理失败: {str(e)}")
             await asyncio.sleep(10)
-            data["text"] = f"*媒体文件处理失败：{str(e)}*"  # 媒体处理异常时覆盖文本
+            data["text"] = f"*媒体文件处理失败*"
 
     return data
 
@@ -451,7 +440,7 @@ async def quotly_handler(message: Message):
             background_color = param
 
     base_id = base_msg.id
-    ids = [base_id + i for i in (range(offset + 1, 1) if offset < 0 else range(0, offset) if offset > 0 else [0])]
+    ids = [base_id + i for i in (range(offset + 1, 1) if offset < 0 else range(0, offset + 1) if offset > 0 else [0])]
 
     messages_to_process = []
     for msg_id in ids:
@@ -481,12 +470,11 @@ async def quotly_handler(message: Message):
             s3_keys_to_delete.append(data["media"]["s3_key"])
 
         current_user_id = data["from"]["id"]
-        # 优化头像和用户名显示逻辑：如果同一用户连续发送多条消息，后续消息不显示头像和用户名
+        # 如果是同一用户连续发送多条消息，后续消息不显示头像和用户名
         if all_messages_data and current_user_id == last_user_id:
             data["avatar"] = False
             data["from"]["name"] = ""
             data["from"]["username"] = ""
-            # 如果是同一用户，则清空头像数据，让 API 知道不要显示头像
             data["from"]["photo"] = {"base64": None}
         else:
             last_user_id = current_user_id
@@ -497,32 +485,12 @@ async def quotly_handler(message: Message):
                 if reply_data.get("media") and reply_data["media"].get("s3_key"):
                     s3_keys_to_delete.append(reply_data["media"]["s3_key"])
 
-                reply_name = reply_data["from"].get("name", "")
-                if not reply_name:
-                    reply_name_parts = filter(None, [
-                        reply_data["from"].get("first_name"),
-                        reply_data["from"].get("last_name")
-                    ])
-                    reply_name = " ".join(reply_name_parts) or "未知用户"
-
-                # 增强回复消息的文本内容判断
+                reply_name = reply_data["from"].get("name", "未知用户")
                 reply_text = reply_data.get("text", "")
-                if not reply_text and reply_data.get("media"):
-                    # 根据媒体类型提供默认文本
-                    if m.reply_to_message.photo:
-                        reply_text = "[图片]"
-                    elif m.reply_to_message.video or m.reply_to_message.animation:
-                        reply_text = "[视频]"
-                    elif m.reply_to_message.sticker:
-                        reply_text = "[贴纸]"
-                    elif m.reply_to_message.audio:
-                        reply_text = "[音频]"
-                    elif m.reply_to_message.voice:
-                        reply_text = "[语音]"
-                    elif m.reply_to_message.document:
-                        reply_text = "[文件]"
-                    else:
-                        reply_text = "[媒体]"
+
+                if not reply_text and (
+                        m.reply_to_message.photo or m.reply_to_message.video or m.reply_to_message.animation or m.reply_to_message.sticker or m.reply_to_message.audio or m.reply_to_message.voice or m.reply_to_message.document):
+                    reply_text = "[媒体文件]"
 
                 data["replyMessage"] = {
                     "name": reply_name,
@@ -530,7 +498,6 @@ async def quotly_handler(message: Message):
                     "entities": reply_data.get("entities", []),
                     "chatId": reply_data["from"]["id"],
                 }
-                # 如果回复消息带有媒体，Quote API也支持显示其媒体
                 if reply_data.get("media"):
                     data["replyMessage"]["media"] = {
                         "url": reply_data["media"]["url"],
@@ -556,6 +523,7 @@ async def quotly_handler(message: Message):
 
     try:
         res = await requests.post(TEXT_QUOTE_API_URL, json=payload)
+        res.raise_for_status()
         json_data = res.json()
         if not json_data.get("ok"):
             error_msg = json_data.get("error", "未知API错误")
@@ -565,20 +533,16 @@ async def quotly_handler(message: Message):
         img_io.name = f"quote.{QUOTE_SETTINGS['format']}"
         img_io.seek(0)
 
-        # 根据最终生成的图片格式发送
         if QUOTE_SETTINGS['format'] == 'webp':
-            # 如果语录生成器始终返回 WebP，则发送动画
             await client.send_animation(chat_id, img_io)
         else:
-            # 否则发送文档（图片）
             await client.send_document(chat_id, img_io)
         await process_msg.safe_delete()
 
-        # 清理S3文件，不编辑消息
         if s3_keys_to_delete:
             for s3_key in s3_keys_to_delete:
                 await delete_s3_file(s3_key)
 
     except Exception as e:
-        await process_msg.edit(f"❌ 语录生成失败：{str(e)}\n请检查Quote API服务状态或请求内容。")
+        await process_msg.edit(f"❌ 语录生成失败：{str(e)}\n请检查Quote API服务状态或网络。")
         await asyncio.sleep(10)
